@@ -1,92 +1,131 @@
 <!doctype html>
 <html>
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport"
-        content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
-  <title>Hello WebXR</title>
-  <!-- three.js -->
-  <script src="https://unpkg.com/three@0.126.0/build/three.js"></script>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>WebXR Sunflower</title>
   <style>
-    html,body{margin:0;height:100%;background:#000;color:#fff;font-family:system-ui}
-    #start{position:fixed;left:1rem;bottom:1rem;padding:.7rem 1rem;border:none;border-radius:12px;background:#111;color:#fff}
-    #msg{position:fixed;left:1rem;top:1rem;right:1rem;color:#ddd}
+    body { margin:0; overflow:hidden; font-family:Arial, sans-serif; }
+    #start, #info {
+      position: absolute; left: 1rem; width: calc(100% - 2rem);
+      padding: .6rem 1rem; color:#fff;
+      background: rgba(0,0,0,0.6); border:none; border-radius:8px;
+    }
+    #start { bottom: 1rem; }
+    #info { top: 1rem; text-align:center; }
   </style>
+  <script src="https://unpkg.com/three@0.160.0/build/three.module.js"></script>
+  <script src="https://unpkg.com/three@0.160.0/examples/jsm/loaders/GLTFLoader.js"></script>
 </head>
 <body>
-  <div id="msg">Tap “Start AR”. Move your phone and look around the coloured cube.</div>
+  <div id="info">Move your phone to scan surfaces, then tap to place the sunflower.</div>
   <button id="start">Start AR</button>
+<script type="module">
+  import {GLTFLoader} from 'https://unpkg.com/three@0.160.0/examples/jsm/loaders/GLTFLoader.js';
 
-<script>
-document.getElementById('start').addEventListener('click', activateXR);
+  const startButton = document.getElementById('start');
+  const infoText = document.getElementById('info');
 
-async function activateXR () {
-  // --- basic guards ---
-  if (location.protocol !== 'https:' && location.hostname !== 'localhost') {
-    alert('WebXR requires HTTPS or localhost.'); return;
-  }
-  if (!('xr' in navigator)) { alert('WebXR not available in this browser.'); return; }
-  if (!(await navigator.xr.isSessionSupported('immersive-ar'))) {
-    alert('immersive-ar not supported on this device/browser.'); return;
-  }
+  let renderer, scene, camera;
+  let hitTestSource = null;
+  let hitTestSpace = null;
 
-  // --- canvas + XR-compatible WebGL context ---
-  const canvas = document.createElement('canvas');
-  document.body.appendChild(canvas);
-  const gl = canvas.getContext('webgl', { xrCompatible: true });
+  startButton.addEventListener('click', async () => {
+    startButton.style.display = 'none';
+    infoText.textContent = 'Looking for surfaces...';
 
-  // --- three.js scene with an unlit coloured cube ---
-  const scene = new THREE.Scene();
+    if (!navigator.xr) return alert('WebXR not available');
+    if (!await navigator.xr.isSessionSupported('immersive-ar')) {
+      return alert('AR not supported');
+    }
 
-  const materials = [
-    new THREE.MeshBasicMaterial({ color: 0xff0000 }),
-    new THREE.MeshBasicMaterial({ color: 0x0000ff }),
-    new THREE.MeshBasicMaterial({ color: 0x00ff00 }),
-    new THREE.MeshBasicMaterial({ color: 0xff00ff }),
-    new THREE.MeshBasicMaterial({ color: 0x00ffff }),
-    new THREE.MeshBasicMaterial({ color: 0xffff00 }),
-  ];
-  const cube = new THREE.Mesh(new THREE.BoxBufferGeometry(0.2, 0.2, 0.2), materials);
-  cube.position.set(.3, .3, .3); // offset so you can walk around it
-  scene.add(cube);
+    const session = await navigator.xr.requestSession('immersive-ar', {
+      requiredFeatures: ['hit-test', 'local-floor']
+    });
+    const canvas = document.createElement('canvas');
+    document.body.appendChild(canvas);
+    const gl = canvas.getContext('webgl', { xrCompatible: true });
 
-  const renderer = new THREE.WebGLRenderer({
-    alpha: true, preserveDrawingBuffer: true, canvas, context: gl
+    session.updateRenderState({ baseLayer: new XRWebGLLayer(session, gl) });
+
+    renderer = new THREE.WebGLRenderer({ canvas, context: gl, alpha: true });
+    renderer.autoClear = false;
+
+    scene = new THREE.Scene();
+    camera = new THREE.PerspectiveCamera();
+    camera.matrixAutoUpdate = false;
+
+    const light = new THREE.HemisphereLight(0xffffff, 0x444444);
+    scene.add(light);
+
+    // Reticle to show placement position
+    const ring = new THREE.RingGeometry(0.1, 0.12, 32).rotateX(-Math.PI / 2);
+    const reticle = new THREE.Mesh(ring, new THREE.MeshBasicMaterial({ color: 0x00ff00 }));
+    reticle.matrixAutoUpdate = false;
+    reticle.visible = false;
+    scene.add(reticle);
+
+    // Load Sunflower Model
+    let sunflower = null;
+    const loader = new GLTFLoader();
+    loader.load('https://example.com/sunflower.glb', (gltf) => {
+      sunflower = gltf.scene;
+      sunflower.scale.set(0.3, 0.3, 0.3);
+      sunflower.visible = false;
+      scene.add(sunflower);
+    });
+
+    session.requestReferenceSpace('local-floor').then((refSpace) => {
+      session.requestReferenceSpace('viewer').then((viewerSpace) => {
+        session.requestHitTestSource({ space: viewerSpace }).then((source) => {
+          hitTestSource = source;
+          hitTestSpace = refSpace;
+        });
+      });
+
+      session.addEventListener('end', () => { hitTestSource = null; });
+
+      const onXRFrame = (time, frame) => {
+        session.requestAnimationFrame(onXRFrame);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, session.renderState.baseLayer.framebuffer);
+
+        const pose = frame.getViewerPose(refSpace);
+        if (!pose) return;
+
+        const view = pose.views[0];
+        const viewport = session.renderState.baseLayer.getViewport(view);
+        renderer.setSize(viewport.width, viewport.height, false);
+
+        camera.matrix.fromArray(view.transform.matrix);
+        camera.projectionMatrix.fromArray(view.projectionMatrix);
+        camera.updateMatrixWorld(true);
+
+        if (hitTestSource) {
+          const hits = frame.getHitTestResults(hitTestSource);
+          if (hits.length > 0) {
+            const hitPose = hits[0].getPose(refSpace);
+            reticle.visible = true;
+            reticle.matrix.fromArray(hitPose.transform.matrix);
+          } else {
+            reticle.visible = false;
+          }
+        }
+
+        renderer.render(scene, camera);
+      };
+
+      session.requestAnimationFrame(onXRFrame);
+    });
+
+    // On tap: place the sunflower at reticle's location
+    renderer.domElement.addEventListener('click', () => {
+      if (!reticle.visible || !sunflower) return;
+      sunflower.visible = true;
+      sunflower.matrix.copy(reticle.matrix);
+      sunflower.matrix.decompose(sunflower.position, sunflower.quaternion, sunflower.scale);
+      infoText.style.display = 'none';
+    });
   });
-  renderer.autoClear = false;
-
-  const camera = new THREE.PerspectiveCamera();
-  camera.matrixAutoUpdate = false;
-
-  // --- WebXR session + reference space ---
-  const session = await navigator.xr.requestSession('immersive-ar');
-  session.updateRenderState({ baseLayer: new XRWebGLLayer(session, gl) });
-  const referenceSpace = await session.requestReferenceSpace('local');
-
-  // --- render loop using XRSession.requestAnimationFrame ---
-  const onXRFrame = (t, frame) => {
-    session.requestAnimationFrame(onXRFrame);
-
-    gl.bindFramebuffer(gl.FRAMEBUFFER, session.renderState.baseLayer.framebuffer);
-    const pose = frame.getViewerPose(referenceSpace);
-    if (!pose) return;
-
-    const view = pose.views[0];
-    const viewport = session.renderState.baseLayer.getViewport(view);
-    renderer.setSize(viewport.width, viewport.height, false);
-
-    camera.matrix.fromArray(view.transform.matrix);
-    camera.projectionMatrix.fromArray(view.projectionMatrix);
-    camera.updateMatrixWorld(true);
-
-    renderer.render(scene, camera);
-  };
-  session.requestAnimationFrame(onXRFrame);
-
-  // tidy UI
-  document.getElementById('start').remove();
-  document.getElementById('msg')?.remove();
-}
 </script>
 </body>
 </html>
