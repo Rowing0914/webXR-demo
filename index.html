@@ -47,7 +47,7 @@ async function activateXR () {
     new THREE.MeshBasicMaterial({ color: 0xffff00 }),
   ];
   const cube = new THREE.Mesh(new THREE.BoxBufferGeometry(0.2, 0.2, 0.2), materials);
-  cube.position.set(1, 1, 1); // offset so you can walk around it
+  cube.position.set(.3, .3, .3); // offset so you can walk around it
   scene.add(cube);
 
   const renderer = new THREE.WebGLRenderer({
