@@ -1,2 +1,0 @@
-# webXR-demo
-asdf
